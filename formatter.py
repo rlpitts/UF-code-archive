@@ -6,11 +6,9 @@ Just a dump heap for functions I needed to make my files usable
 
 @author: Owner
 """
-import glob, re, math, os, sys
+import glob, math, os, sys
 import numpy as np
-#import WISE2MJySr as wise_fcon
 from astropy import wcs
-from scipy.optimize import fsolve
 from astropy.io import fits as pf
 import coordconv as ccon
 from matplotlib.path import Path
@@ -20,7 +18,7 @@ ctab = np.genfromtxt('NantenTab.dat',dtype=None,skip_header=2, usecols=(0,1,2,6)
 dirlist = ['R01','R02to03','R04','R05','R06','R07','R08','R09','R10','R11',
            'R12to15','R16to18','R17','R19','R20','R21','R22','R23','R24','R25',
            'R26','R27','byf01','byf11','byf38','byf57','byf123']
-cdic={d:[] for d in dirlist}
+cdic=dict((d,[]) for d in dirlist)
 for row in ctab:
     ndig = sum(c.isdigit() for c in str(row[3]))
     if row[0] in [1,11,38,57,123]:
@@ -41,7 +39,7 @@ for row in ctab:
 
 
 srclist = ['ATLASGAL','MIPS','GLIMPSE','WISE','MSX','Herschel']
-dest = '/astro/data/rhocnc22/pitts/Regions/'
+dest = '/astro/data/rhocnc20/pitts/Regions/'
 mlist = open('Regions/molist','r').read().splitlines()
 mdic = {}
 for m in mlist:
@@ -59,6 +57,8 @@ for m in mlist:
     mdic[r] = Path(np.vstack((np.copy(foot),np.copy(foot)[0])),closed=True)
     #only close path AFTER appending a copy of the starting point to the end
     #.cleaned() is a poor substitute.
+
+#-----------------------------------------------------------------------
     
 def symclobber(f1,f2):
     try:
@@ -66,6 +66,18 @@ def symclobber(f1,f2):
     except OSError:
         os.remove(f2)
         return os.symlink(f1,f2)
+
+#-----------------------------------------------------------------------
+
+def symfix(path,odir,ndir,debug=True):
+    old_target = os.path.realpath(path)
+    new_target = old_target.replace(odir,ndir,1)
+    if debug:
+        return "Relink: " + path + " from " + old_target + " to " + new_target
+    else:
+        return symclobber(new_target,path)
+
+#-----------------------------------------------------------------------
 
 #use only if necessary - prefer CDELT, CROTA        
 def rotmat(c11,c22,cr,hdr):
@@ -85,6 +97,8 @@ def rotmat(c11,c22,cr,hdr):
     hdr.set('CD2_2',cd2_2,'converted from CDELTi,CROTA2',after='CD2_1')
     return None
 
+#-----------------------------------------------------------------------
+
 def fcc(cr1,cr2,ct1,ct2,foot):
 #DO NOT CLOSE PATHS W/O COPYING STARTING POINT TO END OF VERTICES
     if 'GLON' in ct1 or 'GLAT' in ct2:
@@ -99,10 +113,33 @@ def fcc(cr1,cr2,ct1,ct2,foot):
         box = Path(np.vstack((verts,verts[0])),closed=True)
     return l,b,box
 
+#----------------------------------------------------------------------------
+
+def cut_rags(dat,err=None):
+    naninds = np.argwhere(np.isnan(dat))
+    for i,j in naninds:
+	neighbors = np.ravel(dat[i-1:i+2,j-1:j+2])
+	neigherrs = np.ravel(err[i-1:i+2,j-1:j+2]) if err is not None else None
+	neighbors.remove(dat[i,j])
+	if sum(np.isnan(neighbors)) > 3:
+	    dat[i-1:i+2,j-1:j+2] = np.NaN
+        else
+	    if neigherrs is not None:
+		m = np.where(neigherrs > 0)
+	        dat[i,j] = np.average(neighbors[m],weights=1./neigherrs[m])
+		err[i,j] = np.nanmean(neigherrs[m])
+	    else:
+	        dat[i,j] = np.nanmean(neighbors)
+		
+     if err is not None:
+	return dat,err
+     else:
+	return dat
+
+#----------------------------------------------------------------------------
+
 def setbeam(hd,fname,d): #must be run after sorting into correct directory
-    fwhms = {'ATLASGAL':19.2, 'PLW':35.2, 'PMW':23.9, 'PSW':17.6, 'MG29':6.25, 'msx':18.3,
-             'w4':12.0, 'w3':6.5, 'w2':6.4, 'w1':6.1, 'I4':1.98, 'I3':1.88,
-             'I2':1.72, 'I1':1.66}
+    fwhms = {'ATLASGAL':19.2, 'MG29':6.25, 'msx':18.3, 'w4':12.0, 'w3':6.5, 'w2':6.4, 'w1':6.1, 'I4':1.98, 'I3':1.88, 'I2':1.72, 'I1':1.66}
     if 'hpacs' in fname:
     	pacsbm = np.genfromtxt('Regions/resolns.tbl',dtype=None,names=True,missing_values='-',filling_values=0)
     	pacspa = np.genfromtxt('Regions/PACS_PAsByFile.tbl',dtype=None,names=True,missing_values='nan')
@@ -144,7 +181,20 @@ def setbeam(hd,fname,d): #must be run after sorting into correct directory
         hd.set('BPA',round(pa,1),'in (l,b) for {0}; was {1:0.1f} in fk5'.format(d,pacsbm['pa'][x]),after='BMIN')
 	#numbers in {} [before ':'] are indices in args of format
 	#(required if there are alphanumeric codes after ':' for at least 1 arg in .format)
-        hd.set('PAUNIT','deg    ',after='BPA')
+        #hd.set('PAUNIT','deg    ',after='BPA')
+    elif 'hspire' in fname: 
+        #idk why but this loop was originally inserting something in the SPIRE beam that was not BMAJ or BMIN
+	#lvl3 data replaced DESC with DETECTOR, but I switched it back in make_workfile()
+        if 'PLW' in fname:
+            spbm = 35.4/3600.
+        elif 'PMW' in fname:
+            spbm = 24.2/3600.
+        elif 'PSW' in fname:
+            spbm = 17.9/3600.
+        hd.set('BMAJ',spbm,'FWHM in deg')
+        hd.set('BMIN',spbm,'FWHM in deg', after='BMAJ')
+        hd.set('BPA',0.0,'beam PA (SPIRE beam is asymmetric but with <10% ellipticity)', after='BMIN')
+        #hd.set('PAUNIT','deg    ',after='BPA')
     else:
         for k,v in fwhms.items():
             if k in fname:
@@ -153,87 +203,165 @@ def setbeam(hd,fname,d): #must be run after sorting into correct directory
                     hd.set('BMIN',v/3600,'FWHM in deg', after='BMAJ')
                     hd.set('BPA',0.0,'beam PA (always 0 if symmetric)', after='BMIN')
                     hd.set('PAUNIT','deg    ',after='BPA')
-                elif hd['BMAJ']>0.012:
+                elif hd['BMAJ']>0.6:
                     #replaces values not already in deg
                     hd.set('BMAJ',v/3600,'FWHM in deg')
                     hd.set('BMIN',v/3600,'FWHM in deg', after='BMAJ')
                 if 'BPA' not in hd.keys(): #catch anything missed by above if-elif statement
                     hd.set('BPA',0.0,'beam PA (always 0 if symmetric)', after='BMIN')
                     hd.set('PAUNIT','deg    ',after='BPA')
-    return 'bmaj: {0:0.8f}, bmin: {1:0.8f}, bpa:  {2:0.1f}'.format(hd['BMAJ'],hd['BMIN'],hd['BPA']) #headers are modified in-place regardless of what I do.
+    return 'bmaj: {0:0.8f}, bmin: {1:0.8f}, bpa:  {2:0.1f}'.format(hd['BMAJ'],hd['BMIN'],hd['BPA'])
 
-def flux_norm(hd,dat,omega):
-    '''omega = angular area unit
-    use sr to output in MJy/sr, and arcsec to output in Jy/arcsec^2'''
+#-----------------------------------------------------------
+
+def flux_norm(hd,dat,omega): #MUST BE RUN AFTER SETBEAM()
+    '''omega = angular area unit; use beam to output in Jy/beam, 
+    sr to output in MJy/sr, & asec or arcsec to output in Jy/arcsec^2'''
     #see http://irsa.ipac.caltech.edu/data/SPITZER/docs/spitzermission/missionoverview/spitzertelescopehandbook/19/
     # and maybe http://newton.cx/~peter/2011/12/reference-the-ultimate-resolved-source-cheatsheet/
     bunit = hd['BUNIT']
     print bunit
-    if 'Jy/arcsec^2' in bunit:
+    if omega in bunit:
         print 'flux already normalized'
         return hd,dat
-    elif 'MJy/sr' in bunit:
-        sf=2.350443*(10**(-5))
-    elif any(s in bunit for s in ('Jy/pixel', 'Jy/pix', 'Jy/px')):
-        if 'CDELT' in hd.tostring():
-            x,y=hd['CDELT1'],hd['CDELT2'] #x,y in deg
+
+    else: #convert everything to Jy/deg^2 first; Jy/deg^2 is a nice neutral unit
+        if 'QTTY' in hd.tostring():
+            hd.remove('QTTY____')
+            #not sure but if I get rid of it and the problem w/ Miriad goes away, that could've been confusion source
+
+        if 'CDELT1' in hd.tostring():
+            x,y=float(hd['CDELT1']),float(hd['CDELT2']) #pixel dims (x,y) in deg
         else: #x,y should be in deg by the end
-            if hd['CD2_1']!=0:
-                theta=math.atan(float(hd['CD2_1'])/float(hd['CD1_1']))
-                x=math.degrees((float(hd['CD2_1'])-float(hd['CD1_1']))/(math.cos(theta)-math.sin(theta)))
-                y=math.degrees((float(hd['CD1_2'])+float(hd['CD2_2']))/(math.cos(theta)-math.sin(theta)))
+            if not np.isclose(float(hd['CD2_1']),0.0,rtol=1e-06):
+                cd11=math.radians(float(hd['CD1_1']))
+                #cd12=math.radians(float(hd['CD1_2']))
+                cd21=math.radians(float(hd['CD2_1']))
+                #cd22=math.radians(float(hd['CD2_2']))
+                theta=math.atan(cd21/cd11)
+                x=( float(hd['CD2_1']) - float(hd['CD1_1']) )/( math.cos(theta) - math.sin(theta) )
+                y=( float(hd['CD1_2']) + float(hd['CD2_2']) )/( math.cos(theta) - math.sin(theta) )
             else:
                 x=float(hd['CD1_1'])
                 y=float(hd['CD2_2'])
-        pa = abs(float(x)*float(y))
-        sf = 1./(pa*(3600**2))
-    elif 'Jy/beam' in bunit: #MUST BE RUN AFTER SETBEAM()
-        #after setbeam(), bmaj, bmin should be in degrees
-        #Fix according to http://herschel.esac.esa.int/hcss-doc-13.0/load/spire_drg/html/ch06s09.html ?
-        ba = (np.pi*float(hd['BMAJ'])*float(hd['BMIN']))/(4*math.log(2))
-        sf = 1./(ba*(3600**2))
-    elif 'DN' in bunit: #this is WISE
-	dn_to_jy = {1:1.9350E-06,2:2.7048E-06,3:1.8326e-06,4:5.2269E-05} #DN are per pixel
-	beam_area = {1:  6.08   * 5.60 * np.pi / (4*np.log(2)),
+
+        pixa = abs(x*y) #deg^2
+        if x > hd['BMAJ']:
+            raise ValueError('Error: pixel size greater than beam fwhm')
+            sys.exit()
+
+        if any(s in bunit for s in ('Jy/pixel', 'Jy/pix', 'Jy/px')): #this is HPACS
+            djy = dat / pixa
+
+        elif 'MJy/sr' in bunit: #this is HSPIRE, Glimpse, & MIPS
+            djy = dat * 10.**6 * ( (np.pi/180.)**2 )
+
+        elif 'Jy/beam' in bunit: #this is ATLASGAL
+            #after setbeam(), bmaj, bmin should be in degrees
+            #Fix according to http://herschel.esac.esa.int/hcss-doc-13.0/load/spire_drg/html/ch06s09.html ?        
+            ba =  np.pi * float(hd['BMAJ']) * float(hd['BMIN']) / ( 4*math.log(2) )
+            djy = dat / ba
+
+        elif 'DN' in bunit: #this is WISE
+            dn_to_jy = {1:1.9350E-06,2:2.7048E-06,3:1.8326e-06,4:5.2269E-05} #DN/pixel-->Jy/pixel
+            beam_area = {1:  6.08   * 5.60 * np.pi / (4*np.log(2)),
 	    	     2:  6.84   * 6.12 * np.pi / (4*np.log(2)),
 	    	     3:  7.36   * 6.08 * np.pi / (4*np.log(2)),
 	    	     4:  11.99  * 11.65* np.pi / (4*np.log(2))} #sq arcsec
-	pix_area = hd['PXSCAL1']*hd['PXSCAL2'] #1.375"/pixel at the center
-	bmaj_min_pa = {1:(6.08,5.60,3),2:(6.84,6.12,15),3:(7.36,6.08,6),4:(11.99,11.65,0)}
-	#bmaj/bmin in arcsec, bpa in deg
-    	#PSFs in .csh code assume azimuthally averaged FWHMs, but that should be OK - the 2D PSFs are square anyway
-	band = hd['BAND']
-	hd.set('OMEGABM',beam_area[band],'(arcsec^2)')
-	hd.set('DNTOJY',dn_to_jy[band],'from http://wise2.ipac.caltech.edu/docs/release/prelim/expsup/sec2_3f.html')
-	sf = dn_to_jy[band] / pix_area
-    elif 'W/m^2-sr' in bunit: #this is MSX
-	band = hd['BAND']
-	Wm2_to_jy = {'A':7.133E+12,'C':2.863E+13,'D':3.216E+13,'E':2.476E+13}
-	passband = {'A':'6.8 - 10.8','C':'11.1 - 13.2','D':'13.5 - 15.9','E':'18.2 - 25.1'}
-	wl={'A':8.28E-06,'C':1.213E-05,'D':1.465E-05,'E':2.134E-05}
-	hd.set('WAVELENG',wl[band],'central wavelength', after='BAND')
-	hd.set('BANDFWHM',passband[band],'upper and lower FWHM limits', after='WAVELENG')
-	hd.set('WM2TOJY',Wm2_to_jy[band],'W/m^2sr to Jy/sr conversion factor (see comments)',after='BUNIT')
-	hd.set('COMMENT','radiance to flux conversion relies on isophotal assumption; adjust based on S_nu')
-	sf = Wm2_to_jy[band]/4.254517E10 # 4.254517E10 as^2/sr
-    else:
-        raise ValueError('Unit not recognized')
-        sys.exit()
-    if 'sr' in omega:
-        newdat=dat*sf/(2.350443*(10**(-5)))
-        hd.set('BUNIT','MJy/sr','converted from {}'.format(bunit))
-    elif 'arcsec' in omega:
-        newdat=dat*sf
-        hd.set('BUNIT','Jy/arcsec^2','converted from {}'.format(bunit))
-    return hd,newdat
+            #bmaj_min_pa = {1:(6.08,5.60,3),2:(6.84,6.12,15),3:(7.36,6.08,6),4:(11.99,11.65,0)}
+	    #bmaj/bmin in arcsec (change at addition of OMEGABM), bpa in deg
+    	    #PSFs in .csh code assume azimuthally averaged FWHMs, but that should be OK - the 2D PSFs are square anyway
+            band = hd['BAND']
+            hd.set('OMEGABM',beam_area[band]/(3600.**2),'beam area (deg^2)')
+            hd.set('DNTOJY',dn_to_jy[band],'from http://wise2.ipac.caltech.edu/docs/release/prelim/expsup/sec2_3f.html')
+            djy = dat * dn_to_jy[band] * float(hd['OMEGABM']) / pixa
+
+        elif 'W/m^2-sr' in bunit: #this is MSX
+            band = hd['BAND']
+            Wm2_to_jy = {'A':7.133E+12,'C':2.863E+13,'D':3.216E+13,'E':2.476E+13}
+            passband = {'A':'6.8 - 10.8','C':'11.1 - 13.2','D':'13.5 - 15.9','E':'18.2 - 25.1'}
+            wl={'A':8.28E-06,'C':1.213E-05,'D':1.465E-05,'E':2.134E-05}
+            hd.set('WAVELENG',wl[band],'central wavelength', after='BAND')
+            hd.set('BANDFWHM',passband[band],'upper and lower FWHM limits', after='WAVELENG')
+            hd.set('WM2TOJY',Wm2_to_jy[band],'W/m^2sr to Jy/sr conversion factor (see comments)',after='BUNIT')
+            hd.set('COMMENT','radiance to flux conversion relies on isophotal assumption; adjust based on S_nu')
+            djy = dat * Wm2_to_jy[band] * ( (np.pi/180.)**2 )
+
+        else:
+            raise ValueError('Unit not recognized')
+            sys.exit()
+
+    #By here BMAJ/MIN are in deg
+        if 'sr' in omega:
+            newdat = ( djy * 10.**-6 ) * (180./np.pi)**2
+            hd.set('BUNIT','MJy/sr')
+        elif ('arcsec' in omega) or ('asec' in omega):
+            newdat = djy / 3600.**2
+            hd.set('BUNIT','Jy/asec^2')
+        elif 'beam' in omega:
+            if 'OMEGABM' in hd.tostring():
+                newdat = djy * float(hd['OMEGABM'])
+            else:
+                bma = np.pi * float(hd['BMAJ']) * float(hd['BMIN']) / ( 4*math.log(2) )
+                newdat = djy * bma
+            hd.set('BUNIT','Jy/beam')
+        hd.set('HISTORY','flux density units converted from {}'.format(bunit),before='HISTORY')
+        return hd,newdat
+
+
+#-----------------------------------------------------------------------
+
+def addbeam(fset=None):
+    pacslist=glob.glob('Herschel/workfiles/hpacs*.fits') if fset is None else fset
+    pacsbm = np.genfromtxt('Regions/resolns.tbl',dtype=None,names=True,missing_values='-',filling_values=0)
+    patab = np.genfromtxt('Regions/PAsByRegion.tbl',dtype=None,names=True,missing_values='nan')
+    for f in pacslist:#just add BPAs under HISTORY cards with "ADDBPA.PY:" prefix
+        trunk=f.rsplit('/')[-1]
+        print 'working on ',trunk
+        hdu=pf.open(f,mode='update')
+        hdr=hdu[0].header
+        rlist=[r.rsplit('/')[-2] for r in glob.glob('Regions/*/{}'.format(trunk))]
+        bpalist=[]
+        for d in rlist:
+            om = hdr['INSTMODE'] if 'Para' in hdr['INSTMODE'] else hdr['SCANSP']
+            band=trunk.split('.')[0][-4] if 'err' in trunk else trunk.split('.')[0][-1]
+            x = [i for i in xrange(len(pacsbm)) if (pacsbm['band'][i]==band and pacsbm['mode'][i] in om)][0]
+            y = 'eq_'+str(pacsbm['pa'][x]).replace('.','o')
+            z = [j for j in xrange(len(patab)) if patab['Region'][j]==d][0]
+            pa = patab[y][z]
+            bpalist+=[float(pa)]
+            print 'ADDBEAM.PY: BPA = {0:05.1f} in (l,b) for {1}'.format(pa,d)
+            hdr.set('HISTORY','ADDBEAM.PY: BPA = {0:05.1f} in (l,b) for {1}'.format(pa,d))
+            #:05.1f = single-decimal-place float with left-hand 0 padding to 5 total characters
+        #avgpa=np.median(bpalist)
+        #hdr.set('BPA',round(pa,1),'median BPA in (l,b); was {0:0.1f} in fk5'.format(pacsbm['pa'][x]))
+        #if f==pacslist[0]:
+        #    print hdr
+        #    key=raw_input('everything look OK? If not, type "x" to kill_')
+        #    if key=='x':
+        #        sys.exit()
+        hdu.flush()
+        hdu.close()
+    return None #and done
+
+#---------------------------------------------------------------------------------
 
 def make_hdu(dat,hdr,sname,fname,d):
-    dat0=np.copy(dat)
+    dat0=np.copy(dat) #built-in copy function doesn't cut it here
     hdr0=hdr.copy()
     setbeam(hdr0,sname,d) #hdr0 modified in-place
     #d = k = key in mdic = region folder name; sname = source name
-    hdr1,dat1 = flux_norm(hdr0,dat0,'arcsec')
-    if (np.array(dat1)==np.array(dat0)).all() and 'wise' not in fname:
+    hdr1,dat1 = flux_norm(hdr0,dat0,'beam')
+    check = float(hdr1['CDELT1']) if 'CDELT' in hdr1.tostring() else abs(float(hdr1['CD1_1']))
+    if check > hdr1['BMAJ']:
+        raise ValueError('Error: pixel size greater than beam fwhm')
+        sys.exit()
+    if 'err' in fname or 'err' in sname:
+        dat1[np.isnan(dat1)] = 9999
+        dat1[dat1<0] = 9999
+    else:
+        dat1[np.isnan(dat1)] = 0
+    if (np.array(dat1)==np.array(dat0)).all() and 'flux density units converted from' in hdr.tostring():
 	raise IOError('unit conversion failed to execute')
 	sys.exit()
     else:
@@ -241,13 +369,15 @@ def make_hdu(dat,hdr,sname,fname,d):
         pf.HDUList(new_hdu).writeto(fname,clobber=True)
         return 'New header & data written to {}'.format(fname)
 
+#-------------------------------------------------------------------------------
+
 def make_workfile(fi):
     hdu = pf.open(fi)
     hdr = hdu['image'].header.copy() if 'Herschel' in fi else hdu[0].header
     apath = os.path.abspath(fi)
-    hdr['RAWFNAME']=apath #tracer
-    if 'CDELT' in hdr.tostring() and 'CD1' not in hdr.tostring():
-        rotmat(hdr['CDELT1'],hdr['CDELT2'],hdr['CROTA2'] if 'CROTA2' in hdr else 0.000,hdr)
+    hdr.set('HISTORY',apath,'original file name')
+    #if 'CDELT' in hdr.tostring() and 'CD1' not in hdr.tostring():
+        #rotmat(hdr['CDELT1'],hdr['CDELT2'],hdr['CROTA2'] if 'CROTA2' in hdr else 0.000,hdr)
         #add rotation matrix just in case anything requires it
         #prefer CDELTs, but the full matrix did come up somewhere...
     foot = wcs.WCS.calc_footprint(wcs.WCS(hdr.tostring() if 'Herschel' in fi else fi))
@@ -258,9 +388,16 @@ def make_workfile(fi):
     imdat = hdu['image'].data if 'Herschel' in fi else hdu[0].data
     if 'Herschel' in fi:
         phdr = hdu[0].header #not used outside this loop
-        hdr.set('INSTRUME',phdr['INSTRUME'],'Instrument attached to this product',after='META_0')
-        hdr.set('CUSMODE',phdr['CUSMODE'],'Common Uplink System observation mode',after='INSTRUME')
-        hdr.set('INSTMODE',phdr['INSTMODE'],'Instrument Mode',after='INSTRUME')
+        hdr.set('TELESCOP',phdr['TELESCOP'],'Name of telescope',after='META_0')
+        hdr.set('INSTRUME',phdr['INSTRUME'],'Instrument attached to this product',after='TELESCOP')
+	if 'DESC' in phdr.tostring():
+            hdr.set('DESC',phdr['DESC'],'Name of this product',after='INSTRUME')
+	elif 'DETECTOR' in phdr.tostring():
+	    hdr.set('DESC',phdr['DETECTOR'],'Name of this product',after='INSTRUME')
+        hdr.set('CUSMODE',phdr['CUSMODE'],'Common Uplink System observation mode',after='DESC')
+        hdr.set('INSTMODE',phdr['INSTMODE'],'Instrument Mode',after='DESC')
+        if 'hspire' in fi:
+	    hdr.set('OFFSET',phdr['META_8'],after='INSTRUME')
         if 'hpacs' in fi and 'Para' not in phdr['INSTMODE']:
             hdr.set('SCANSP',phdr['SCANSP'],phdr.comments['SCANSP'],after='INSTMODE')
             hdr.set('SCANVELO',phdr['SCANVELO'],phdr.comments['SCANVELO'],after='INSTMODE')
@@ -294,13 +431,15 @@ def make_workfile(fi):
                     make_hdu(edat,hdr,fi,erfnm,k)
                 symclobber(os.path.abspath(erfnm), erlnm)
             elif 'WISE' in apath:
-                nm='wise'+seq[-1]
+                nm='wise'+seq[-1].replace('unc','err')
             elif 'GLM' in apath or 'VELACAR' in apath:
                 nm=seq[-1][:-5]+'_0.6'+seq[-1][-5:] if '0.6' in apath else seq[-1][:-5]+'_1.2'+seq[-1][-5:]
             else:
-                nm=seq[-1]
+                nm=seq[-1].replace('std','err')
             fullnm = os.path.join(froot,nm) #technically not a full name, just full relative path from cwd
             lnm = os.path.join(lroot,nm)
+            if '//' in lnm:
+                lnm = lnm.replace('//','/') #I don't know why this showed up once; it hadn't before
             if os.path.isfile(fullnm)==True and used>0:
                 print 'work file already made'
             else:
@@ -315,8 +454,10 @@ def make_workfile(fi):
         unused=None
     return unused
 
+#----------------------------------------------------------------------
+
 print 'Choose source folder {} or type "esc" to quit _'.format(srclist)
-def mover(arg):
+def mover(arg,flist=None):
     unused=[]
     if arg == 'esc':
         return 'Quitting'
@@ -324,13 +465,15 @@ def mover(arg):
         return 'Please retry with a valid option.'
     else:
         if arg == 'ATLASGAL':
-            for nm in glob.glob('ATLASGAL/ATLASGAL*.fits'):
+	    flist = glob.glob('ATLASGAL/ATLASGAL_glon???.fits')+glob.glob('ATLASGAL/ATLASGAL_glon???_err.fits') if flist is None else flist
+            for nm in flist:
                 u = make_workfile(nm)
                 if u is not None:
                     unused.append(u)
 
         elif arg == 'Herschel':
-            for nm in glob.glob('Herschel/lvl2-*/*/level*/*/*.fits.gz'):
+	    flist = glob.glob('Herschel/lvl2-5/*/level*/*/*.fits.gz') if flist is None else flist
+            for nm in flist:
                 #readymade=os.listdir('Herschel/workfiles/')
                 #seq=nm.rsplit('/')
                 #cmap = [('level','lvl'),('HPPPMAP',''),('HPPJSMAP',''),('HPPUNIMAP',''),
@@ -338,7 +481,7 @@ def mover(arg):
                 #newnm = '_'.join(['hpacs' if 'pacs' in nm else 'hspire',seq[1][3:],'id'+seq[-4][-5:],seq[-2]+'.fits'])
                 #for old,new in cmap:
                 #    newnm = newnm.replace(old,new) if old in newnm else newnm
-                if 'diag' in nm or 'browse' in nm:
+                if 'diag' in nm or 'browse' in nm or 'psrc' in nm:
                     continue
                 #elif newnm in readymade:
                 #    print newnm, ' exists; skipping'
@@ -347,21 +490,26 @@ def mover(arg):
                     u = make_workfile(nm)
                 if u is not None:
                     unused.append(u)
+            if any('hpacs' in f for f in flist):
+		addbeam(fset=flist)
 
         elif arg == 'WISE':
-            for nm in glob.glob('WISE/*.fits'):
+	    flist = glob.glob('WISE/*.fits') if flist is None else flist
+            for nm in flist:
                 u = make_workfile(nm)
                 if u is not None:
                     unused.append(u)
 
         elif arg == 'MSX':
-            for nm in glob.glob('MSX/*.fits'):
+	    flist = glob.glob('MSX/*.fits') if flist is None else flist
+            for nm in flist:
                 u = make_workfile(nm)
                 if u is not None:
                     unused.append(u)
 
         elif arg == 'MIPS':
-            for nm in glob.glob('MIPS/*.fits'):
+	    flist = glob.glob('MIPS/*.fits') if flist is None else flist
+            for nm in flist:
                 if 'cube' in nm:
                     continue
                 u = make_workfile(nm)
@@ -369,55 +517,45 @@ def mover(arg):
                     unused.append(u)
 
         elif arg == 'GLIMPSE':
-            for root, dirs, files in os.walk('GLIMPSE'):
-                for nm in files:
-                    if nm.endswith('.fits'):
-                        u = make_workfile(os.path.join(root, nm))
-                        if u is not None:
-                            unused.append(u)
+	    if flist is not None:
+		for nm in flist:
+                    u = make_workfile(os.path.join(root, nm))
+                    if u is not None:
+                        unused.append(u)
+	    else:
+                for root, dirs, files in os.walk('GLIMPSE'):
+		    if 'workfiles' not in root and 'workfiles' not in dirs:
+                        for nm in files:
+			    if nm.endswith('.fits'):
+                                u = make_workfile(os.path.join(root, nm))
+                                if u is not None:
+                                    unused.append(u)
     return 'Soft-linking complete. The following {} files were unused: {}'.format(len(unused),unused)
 
-def addbeam():
-    pacslist=glob.glob('Herschel/workfiles/hpacs*.fits')
-    pacsbm = np.genfromtxt('Regions/resolns.tbl',dtype=None,names=True,missing_values='-',filling_values=0)
-    patab = np.genfromtxt('Regions/PAsByRegion.tbl',dtype=None,names=True,missing_values='nan')
-    for f in pacslist:#just add BPAs under HISTORY cards with "ADDBPA.PY:" prefix
-        trunk=f.rsplit('/')[-1]
-        print 'working on ',trunk
-        hdu=pf.open(f,mode='update')
-        hdr=hdu[0].header
-        rlist=[r.rsplit('/')[-2] for r in glob.glob('Regions/*/{}'.format(trunk))]
-        bpalist=[]
-        for d in rlist:
-            om = hdr['INSTMODE'] if 'Para' in hdr['INSTMODE'] else hdr['SCANSP']
-            band=trunk.split('.')[0][-4] if 'err' in trunk else trunk.split('.')[0][-1]
-            x = [i for i in xrange(len(pacsbm)) if (pacsbm['band'][i]==band and pacsbm['mode'][i] in om)][0]
-            y = 'eq_'+str(pacsbm['pa'][x]).replace('.','o')
-            z = [j for j in xrange(len(patab)) if patab['Region'][j]==d][0]
-            pa = patab[y][z]
-            bpalist+=[float(pa)]
-            print 'ADDBEAM.PY: BPA = {0:05.1f} in (l,b) for {1}'.format(pa,d)
-            hdr.set('HISTORY','ADDBEAM.PY: BPA = {0:05.1f} in (l,b) for {1}'.format(pa,d))
-            #:05.1f = single-decimal-place float with left-hand 0 padding to 5 total characters
-        avgpa=np.median(bpalist)
-        hdr.set('BPA',round(pa,1),'median BPA in (l,b); was {0:0.1f} in fk5'.format(pacsbm['pa'][x]))
-        if f==pacslist[0]:
-            print hdr
-            key=raw_input('everything look OK? If not, type "x" to kill_')
-            if key=='x':
-                sys.exit()
-        hdu.flush()
-        hdu.close()
-    return None #and done
+#----------------------------------------------------
 
 def msx_errmap(fi):
     band=fi.split('msxs3')[1][0]
     hdu1=pf.open(fi)
     nfi = fi.split('-')[0]+'err-'+fi.split('-')[1]
     edat = hdu1[0].data*0.17 if band=='E' else hdu1[0].data*0.16
-    hdu2=pf.writeto(nfi,edat,hdu1[0].header, clobber=True)
+    pf.writeto(nfi,edat,hdu1[0].header, clobber=True)
     hdu1.close()
     return "Naive MSX error map written to ", nfi
+
+def wt2rms(fi):
+    hdu=pf.open(fi)
+    dat = hdu[0].data
+    hd = hdu[0].header
+    wt=np.float64(dat)
+    wt[np.where(wt<=0)] = np.nan
+    rms=1/np.sqrt(wt)
+    hd.set('HISTORY','units reflect current rms usage, not weight',after='COMBINET')
+    hd.set('HISTORY','converted from weight map (wt = 1/rms^2)',after='COMBINET')
+    pf.writeto(fi.replace('_wt','_err'),rms,hd, clobber=True)
+    hdu.close()
+    return fi, ' converted to rms error map', fi.replace('_wt','_err')
+
 #Forget this, it's making everything worse.
 #def wise_offset(fi):
 #    band = fi.split('wise')[1][:2]
