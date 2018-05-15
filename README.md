@@ -11,4 +11,5 @@ The c-shell script and any routines it calls are also only here as back-ups and 
 3. There must be a list of the CHaMP survey images to use as regridding templates in the CWD.
 4. Each Region folder must contain a list of its IR/sub-mm data files/symlinks (with any you don't intend to process commented out. This is important: Idk which task it is, but one of Miriad's tasks will absolutely destroy the result if you combine 2 images in a place where one has data and another is blanked.)
 5. There must be a copy of regrid.pro and imblreplace2.sh in the CWD.
+
 Even then there's no guarantee. I'd do it all in python but there's something wrong with Astropy's convolution program because even when I make sure to specify the FWHM in sigma, the fluxes are lower than expected by a factor of several. If you can find a way to convol and regrid your files in pure python or IDL, or really any software from this century, I'd highly recommend it and would love to know about it.
