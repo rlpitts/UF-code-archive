@@ -9,7 +9,7 @@ Created on Mon May 14 19:21:50 2018
 import numpy as np
 import astropy.io.fits as pf
 from astropy.wcs import WCS
-import matplotlib as mpl
+#import matplotlib as mpl
 import matplotlib.pyplot as pl
 from scipy.optimize import curve_fit as curvf
 import scipy.integrate as spi
@@ -23,12 +23,18 @@ warnings.simplefilter("error", OptimizeWarning)
 #regrid blue channel images to red channel templates (2"/px)
 #integrate over lines
 
-oi63=pf.open('workfiles/F0313_FI_IFS_04006131_BLU_WXY_OI63um.fits')
-oi145=pf.open('workfiles/F0313_FI_IFS_04006132_RED_WXY_OI145um.fits')
-oiii=pf.open('workfiles/F0313_FI_IFS_04006132_BLU_WXY_OIII88um.fits')
-cii=pf.open('workfiles/F0313_FI_IFS_04006131_RED_WXY_CII158um.fits')
+oi63=pf.open('workfiles/F0313_FI_IFS_04006131_BLU_WXY_OI63um_L4.fits')
+oi145=pf.open('workfiles/F0313_FI_IFS_04006132_RED_WXY_OI145um_L4.fits')
+oiii=pf.open('workfiles/F0313_FI_IFS_04006132_BLU_WXY_OIII88um_L4.fits')
+cii=pf.open('workfiles/F0313_FI_IFS_04006131_RED_WXY_CII158um_L4.fits')
 
 lw={'oi63':63.185,'oi145':145.53,'oiii':88.36,'cii':157.74}
+flxs = {'oi63':oi63[3].data,'oi145':oi145[1].data,'oiii':oiii[1].data,
+        'cii':cii[1].data}
+errs = {'oi63':oi63[4].data,'oi145':oi145[2].data,'oiii':oiii[2].data,
+        'cii':cii[2].data}
+wlas = {'oi63':oi63[5].data,'oi145':oi145[5].data,'oiii':oiii[5].data,
+        'cii':cii[5].data}
 
 #ext0 has no data, only the complete header - copy to flux?
 #ext1-10 are the following:
@@ -54,28 +60,58 @@ def fitslice(fname):
         mainhd = hdu[0].header
     
     for i in xrange(len(hdu)):
-        if i==0:
-            pass
-        else:
-            hdr=hdu[i].header
+        if hdu[i].data is not None:
+            if len(hdu)>=10:
+                hdr=hdu[i].header
+            elif len(hdu)==3:
+                hdr=mainhd
+                try:
+                    del hdr['TRACMODE']
+                    del hdr['TRACERR']
+                    del hdr['NODDING']
+                    del hdr['CHOPPING']
+                except KeyError:
+                    pass
+#                if '146' in fname:
+#                    del hdr[141:145]
+#                else:
+#                    del hdr[90:94]
+                if 'XTENSION' not in hdr:
+                    hdr.set('XTENSION','IMAGE', 'IMAGE extension',after='BITPIX')                          
+                if i==1:
+                    hdr.set('EXTNAME','ERROR',after='XTENSION')
+                elif i==2:
+                    hdr.set('EXTNAME','FLAG',after='XTENSION')
+                
             hdr.set('CHANNEL',mainhd['CHANNEL'],'Detector channel',after='EXTNAME')
-            if 'BLUE' in mainhd['CHANNEL'] and 'CROTA2' in hdr.tostring():
-                hdr.set('BMAJ',5/3600.,'beam major axis (deg)',after='CROTA2')
-                hdr.set('BMIN',5/3600.,'beam minor axis (deg)',after='BMAJ')
-            elif 'RED' in mainhd['CHANNEL'] and 'CROTA2' in hdr.tostring():
-                hdr.set('BMAJ',10/3600.,'beam major axis (deg)',after='CROTA2')
-                hdr.set('BMIN',10/3600.,'beam minor axis (deg)',after='BMAJ') 
+            if hdr['CHANNEL'] in ['BLUE','BLU','blue','blu']:
+                hdr.set('BMAJ',6/3600.,'beam major axis (deg)',after='CROTA2')
+                hdr.set('BMIN',6/3600.,'beam minor axis (deg)',after='BMAJ')
+            elif hdr['CHANNEL'] in ['RED','red']:
+                hdr.set('BMAJ',12/3600.,'beam major axis (deg)',after='CROTA2')
+                hdr.set('BMIN',12/3600.,'beam minor axis (deg)',after='BMAJ') 
                 
-            if 'OI63um' in fname:
-                obase='fifi_oi_63um_'
-            elif 'OI145um' in fname:
-                obase='fifi_oi_145um_'
-            elif 'OIII88um' in fname:
-                obase='fifi_oiii_88um_'
-            elif 'CII158um' in fname:
-                obase='fifi_cii_158um_'
-                
+            if 'OI63' in fname:
+                obase='fifils_OI63_'
+            elif 'OI145' in fname:
+                obase='fifils_OI145_'
+            elif 'OI146' in fname:
+                obase='fifils_OI146_'              
+            elif 'OIII88' in fname:
+                obase='fifils_OIII88_'
+            elif 'CII158' in fname:
+                obase='fifils_CII158_'
+#            try:    
+            if 'Cont' in fname:
+                obase=obase+'cont_'
+            elif 'Flux' in fname:
+                obase=obase+'line_'
             oname = 'workfiles/'+obase+hdr['EXTNAME']+'.fits'
+#            except KeyError:
+#                if i==1:
+#                    oname = 'workfiles/'+obase+'ERR.fits'
+#                elif i==2:
+#                    oname = 'workfiles/'+obase+'flag.fits'
             newhdu = pf.PrimaryHDU(data=hdu[i].data,header=hdr)
             newhdu.writeto(oname,overwrite=True)
             print 'wrote {} extension to {}'.format(hdr['EXTNAME'],oname)
@@ -125,7 +161,7 @@ def pltspec(cube,wvl,x,y,ecube=None,clr='k',mrkr=None,mec=None,mfc=None,ms=None,
         ul=np.sqrt(np.diag(lcov))
         print l, lcov, ul
         wl=np.linspace(np.nanmin(wvl),np.nanmax(wvl),100)
-        specl=lorentz(wl,l[0],l[1],abs(l[2]),l[3])
+        specl=lorentz(wl,l[0],l[1],abs(l[2]),l[3],l[4])
         fwhm=2*abs(l[2])
         pl.plot(wl,specl,'r-',label='FWHM={:.3}'.format(fwhm)+'$\mu$m')
 
@@ -134,7 +170,7 @@ def pltspec(cube,wvl,x,y,ecube=None,clr='k',mrkr=None,mec=None,mfc=None,ms=None,
     return None
 
 def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
-            fitfn='gauss'):
+            fitfn='gauss',clobber=True):
     if type(fden) is str:
         hdu=pf.open(fden)
         if len(hdu)>1:
@@ -164,12 +200,13 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
                 hdr.set('ION','['+key.upper()+']',after='CHANNEL')
             hdr.set('LINECNTR',val,after='ION')
             break
+    print lc
     if fitfn not in ['gauss','lorentz']:
         raise IOError("Fitting function name must be 'lorentz' or 'gauss'")
     cubedims=np.shape(cube)
     frames=np.array([(n,w) for n,w in enumerate(wvl) if (lc-0.2<w<lc+0.2)])
     #3 sigma is about 27% larger than 2 fwhm
-    inds,wls=np.transpose(frames)
+    inds,fwls=np.transpose(frames)
     fdencube=np.zeros((cubedims[1],cubedims[2]))
     fduncube=np.zeros((cubedims[1],cubedims[2]))
     spindex=np.zeros((cubedims[1],cubedims[2]))
@@ -187,23 +224,21 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
                 p,pcov=curvf(globals()[fitfn],wvl[~np.isnan(spec)],
                              spec[~np.isnan(spec)],
                              sigma=uspec[~np.isnan(spec)],
-                             bounds = [[0.01,min(wvl),np.mean(wvl[1:]-wvl[:-1]),-10,0.],
-                                       [50.,max(wvl),0.4,10,10.0]])
+                             bounds = [[0.01,lc-0.05,np.mean(wvl[1:]-wvl[:-1]),-10,0.],
+                                       [50.,lc+0.05,0.4,10,10.0]])
                 fwhm = 2*abs(p[2]) if fitfn=='lorentz' else p[2]*np.sqrt(8*np.log(2))
-                print 'p = ',p
-                goodlc = lc-0.05<p[1]<lc+0.05
+                #goodlc = lc-0.05<p[1]<lc+0.05 #why is this True here...
                 goodcov = np.inf not in pcov
-                print goodlc,goodcov
+                print '1st try:  ', fwhm,goodcov#, goodlc
             except (ValueError,RuntimeError,NameError) as e:
                 print e
                 pass
-                
-            print ('fwhm' in locals() and locals()['fwhm']<0.16)
-            print ('goodlc' in globals() and globals()['goodlc'] is True)
+            print ('fwhm' in locals() and locals()['fwhm']<0.16) 
+            #print ('goodlc' in globals() and globals()['goodlc'] is True) #...but False here?
             print ('goodcov' in locals() and locals()['goodcov'] is True)
             
             if (('fwhm' in locals() and locals()['fwhm']<0.16) and 
-                ('goodlc' in globals() and globals()['goodlc'] is True) and
+                #('goodlc' in globals() and globals()['goodlc'] is True) and
                 ('goodcov' in locals() and locals()['goodcov'] is True)):
                 print 'all good'
                 stdp=np.sqrt(np.diag(pcov))
@@ -224,22 +259,26 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
                 try:
                     s=spec[~inds.astype(int)]
                     u=uspec[~inds.astype(int)]
-                    q,qcov=curvf(lreg,wls[~np.isnan(s)],s[~np.isnan(s)],
+                    w=wvl[~inds.astype(int)]
+                    q,qcov=curvf(lreg,w[~np.isnan(s)],s[~np.isnan(s)],
                                  sigma=u[~np.isnan(s)],bounds = [[-10,0.],[10,10.0]])
-                    r,rcov=curvf(globals()[fitfn], wvl[inds.astype(int)],
+                    r,rcov=curvf(globals()[fitfn], fwls,
                                  spec[inds.astype(int)],
                                  sigma=uspec[inds.astype(int)],
-                                 bounds = [[0.01,min(wvl),np.mean(wvl[1:]-wvl[:-1]),-10,0.],
-                                            [50.,max(wvl),0.4,10,10.0]])
+                                 bounds = [[0.01,lc-0.05,np.mean(wvl[1:]-wvl[:-1]),-10,0.],
+                                            [50.,lc+0.05,0.4,10,10.0]])
                     rfwhm = 2*abs(p[2]) if fitfn=='lorentz' else p[2]*np.sqrt(8*np.log(2))
-                    goodlc2 = lc-0.05<r[1]<lc+0.05
+                    #goodlc2 = lc-0.05<r[1]<lc+0.05
                     goodcov2 = np.inf not in pcov
-                    print rfwhm, goodlc2, goodcov2
+                    print '2nd try:  ', rfwhm, goodcov2#, goodlc2
                 except (ValueError,RuntimeError,NameError) as e2:
                     print e2
+                print ('rfwhm' in locals() and locals()['rfwhm']<0.16)
+                #print ('goodlc2' in globals() and globals()['goodlc2'] is True)
+                print ('goodcov2' in locals() and locals()['goodcov2'] is True)
                 
                 if (('rfwhm' in locals() and locals()['rfwhm']<0.16) and 
-                    ('goodlc2' in globals() and globals()['goodlc2']==True) and
+                    #('goodlc2' in globals() and globals()['goodlc2'] is True) and
                     ('goodcov2' in locals() and locals()['goodcov2'] is True)):
                     print 'backup: fwhm = ',rfwhm
                     stdr=np.sqrt(np.diag(rcov))
@@ -259,7 +298,7 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
                     fdencube[x,y]=r[0]
                     fduncube[x,y]=stdr[0]
                 else:
-                    print 'line fit failed, attempting continuum fit'
+                    print 'line fit failed, attempting pure continuum fit'
                     fdencube[x,y]=np.NaN
                     fduncube[x,y]=np.NaN
                     lincube[:,x,y]=np.NaN
@@ -281,7 +320,7 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
     lhdr=hdr.copy()
     lhdr.set('EMTYPE','Line emission',before='ION')
     lhdr.append('HISTORY','continuum removed with sofia_utils.splitflux()')
-    lhdr['CRVAL3']=wls[0]
+    lhdr['CRVAL3']=fwls[0]
     lhdu1 = pf.PrimaryHDU(data=lincube,header=lhdr)
     lhdu2 = pf.ImageHDU(data=elincube,name='error')
     lhdu3 = pf.ImageHDU(data=fdencube,name='flux_density_fit')
@@ -289,7 +328,7 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
     lhdu5 = pf.ImageHDU(data=frames,name='frames')
     lhdu0 = pf.HDUList([lhdu1,lhdu2,lhdu3,lhdu4,lhdu5])
     lhdu0.writeto(writeto[0] if type(writeto) is list else 'workfiles/fifils-'+ltxt+'-lineonly.fits',
-                  overwrite=True)
+                  overwrite=clobber)
     chdr=hdr.copy()
     chdr.set('EMTYPE','Continuum emission',before='ION')
     chdr.append('HISTORY',hdr['ION']+' line emission removed with sofia_utils.splitflux()')
@@ -299,7 +338,7 @@ def splitflux(fden, wavelen=None,ferr=None,writeto=None,hdr=None,
     chdu4 = pf.ImageHDU(data=spundex,name='spectral_index_error')    
     chdu0 = pf.HDUList([chdu1,chdu2,chdu3,chdu4])
     chdu0.writeto(writeto[1] if type(writeto) is list else 'workfiles/fifils-'+ltxt+'-continuum.fits',
-                  overwrite=True)
+                  overwrite=clobber)
     d = {'lflux':lincube,'cflux':concube,'lerror':elincube,'cerror':econcube}
     return d
     
@@ -321,15 +360,15 @@ def fluxint(fden, wavelen=None,ferr=None,method='trapz',writeto=None,hdr=None,
     if ferr is not None:
         ecube=pf.open(ferr)[0].data if type(ferr) is str else ferr
     if wavelen is not None:
-        wvl=pf.open(wavelen)[0].data if type(wvl) is str else wvl
+        wvl=pf.open(wavelen)[0].data if type(wavelen) is str else wavelen
     else:
         raise ValueError("If wavelength array isn't defined by now, you goofed")
     cubedims = np.shape(cube)
-    freq=(2.99792458*10**8)/wvl
-    icube = getattr(spi,method)(np.ma.masked_invalid(np.flip(cube,axis=0)*10**-26),
+    freq=np.flip((2.99792458*10**8)/wvl,axis=0)
+    icube = getattr(spi,method)(np.ma.masked_invalid(np.flip(cube,axis=0)),
                     x=freq,axis=0)
     if ferr is not None:
-        esqr = np.sqrt(np.nansum(np.flip(ecube,axis=0)**2,axis=0))*10**-26
+        esqr = np.sqrt(np.nansum(np.flip(ecube,axis=0)**2,axis=0))
     if intgauss is True or intlorentz is True:
         fn = 'lorentz' if intlorentz is True else 'gauss'
         fitsqr=np.zeros((cubedims[1],cubedims[2]))
@@ -373,3 +412,101 @@ def fluxint(fden, wavelen=None,ferr=None,method='trapz',writeto=None,hdr=None,
         return icube,esqr,fit_dict
     else:
         return icube,esqr
+
+pdrwebs={'ts':pf.open('workfiles/tsweb.fits')[0],
+         'cii':pf.open('workfiles/cpweb.fits')[0],
+         'fir':pf.open('workfiles/firweb.fits')[0],
+         'oioi':pf.open('workfiles/oioiweb.fits')[0], #[O I] 145 Micron/[O I] 63 Micron
+         'o145cii':pf.open('workfiles/o145ciiweb.fits')[0],
+         'o63cii':pf.open('workfiles/oicpweb.fits')[0]}
+#def matchlines(rats,urats,smaps,smhds):
+    
+def isclose(a, b, rel_tol=1e-09, abs_tol=0.0):
+    return abs(a-b) <= max(rel_tol * max(abs(a), abs(b)), abs_tol)
+
+def match_lines3d(arr1,arr2,arr3, errmaps=None, fliprats=[0,0,0],
+                  scanmaps=[pdrwebs['oioi'],pdrwebs['o145cii'],pdrwebs['o145cii']]):
+    #add coversion to/from cgs
+    if type(arr1) is str:
+        hdu=pf.open(arr1)
+        if len(hdu)>1:
+            im1=hdu[0].data
+            uim1=hdu[1].data
+            hdr1=hdu[0].header
+        else:
+            im1=hdu[0].data
+            hdr1=hdu[0].header
+            uim1=None
+    else:
+        im1=arr1
+        uim1=None
+    if type(arr2) is str:
+        hdu2=pf.open(arr2)
+        if len(hdu2)>1:
+            im2=hdu2[0].data
+            uim2=hdu2[1].data
+            hdr2=hdu2[0].header
+        else:
+            im2=hdu2[0].data
+            hdr2=hdu2[0].header
+            uim2=None
+    else:
+        im2=arr2
+        uim2=None
+    if type(arr3) is str:
+        hdu3=pf.open(arr3)
+        if len(hdu3)>1:
+            im3=hdu3[0].data
+            uim3=hdu3[1].data
+            hdr3=hdu3[0].header
+        else:
+            im3=hdu2[0].data
+            hdr3=hdu2[0].header
+            uim3=None
+    else:
+        im3=arr3
+        uim3=None
+        
+    if errmaps is not None:
+        uim1=pf.open(errmaps[0])[0].data if uim1 is None else uim1
+        uim2=pf.open(errmaps[1])[0].data if uim2 is None else uim2
+        uim3=pf.open(errmaps[1])[0].data if uim3 is None else uim3
+    #this will raise an index error if they're not all the same size
+    if 'hdr1' in globals() and 'hdr2' in globals() and 'hdr3' in globals():
+        if not hdr1['CDELT2']==hdr2['CDELT2']==hdr3['CDELT2']:
+            raise IndexError('disimilar coordinate systems.'+
+                             ' Check header[CDELTi] cards & regrid where needed')
+    #MUST REGRID EVERYTHING TO CII MAPS - it won't work otherwise
+    ratio1 = im2/im1 if fliprats[0]==0 else im1/im2 #o145/cii
+    ratio2 = im3/im1 if fliprats[1]==0 else im1/im3 #o63/cii
+    ratio3 = im2/im3 if fliprats[2]==0 else im3/im2 #o145/o63
+    urat1=ratio1*np.sqrt((uim1/im1)**2+(uim2/im2)**2)
+    urat2=ratio1*np.sqrt((uim1/im1)**2+(uim3/im3)**2)
+    urat3=ratio1*np.sqrt((uim2/im2)**2+(uim3/im3)**2)
+    #uratiof = np.sqrt((uim1/im1)**2+(uim2/im2)**2+(uim3/im3)**2)
+    
+    web1,web2,web3 = [sm.data for sm in scanmaps]
+    #whd1,whd2,whd3 = [sm.header for sm in scanmaps]
+    w1,w2,w3 = [WCS(sm) for sm in scanmaps]
+    
+    ratshape = np.shape(ratio1)
+    narr = np.zeros((ratshape[0],ratshape[1],2))
+    garr = np.zeros((ratshape[0],ratshape[1],2))
+    for x in xrange(ratshape[0]):
+        for y in xrange(ratshape[1]):
+            inds1=np.where(np.logical_and(web1>ratio1[x,y]-urat1[x,y],
+                                          web1<ratio1[x,y]+urat1[x,y]))
+            inds2=np.where(np.logical_and(web2>ratio2[x,y]-urat2[x,y],
+                                          web2<ratio2[x,y]+urat2[x,y]))
+            inds3=np.where(np.logical_and(web3>ratio3[x,y]-urat3[x,y],
+                                          web3<ratio3[x,y]+urat3[x,y]))
+            #remember, switch x & y and add 1 to get the proper coordinates
+            #c = np.concatenate((web1[inds1],web2[inds2],web3[inds3]))
+            n1,g01 = w1.all_pix2world(inds1[0],inds1[1],1)
+            n2,g02 = w2.all_pix2world(inds2[0],inds2[1],1)
+            n3,g03 = w3.all_pix2world(inds3[0],inds3[1],1)
+            logn = set.intersection(set(n1),set(n2),set(n3))
+            logg0 = set.intersection(set(g01),set(g02),set(g03))
+            narr[x,y,0],narr[x,y,1] = np.nanmin(logn),np.nanmax(logn)
+            garr[x,y,0],narr[x,y,1] = np.nanmin(logg0),np.nanmax(logg0)
+    return narr,garr 
