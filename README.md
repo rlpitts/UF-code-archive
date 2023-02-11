@@ -1,5 +1,5 @@
 # Hello-World
-misc. code for PhD research
+misc. code for PhD research (and a branch for MS research)
 
 I did not write coordconv.py, but formatter.py needs it to work and it's open source. See coordconv.py file for license.
 
